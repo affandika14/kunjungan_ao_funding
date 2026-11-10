@@ -1,5 +1,7 @@
-# Ignore upload ZIP
-upload.zip
+# Upload files
+uploads.zip
+/uploads/
 
-# Ignore folder upload beserta seluruh isinya
+# Jika juga ada folder tanpa s
+upload.zip
 /upload/
