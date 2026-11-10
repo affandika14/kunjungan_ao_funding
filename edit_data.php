@@ -53,19 +53,39 @@ $pesan_error = "";
 // 3. Proses Update Data
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     try {
-        $nama_file = $d['bukti_kegiatan'] ?? '-'; 
+        // Validasi kolektibilitas (hanya jenis kunjungan): harus angka yang ada di reff_kolektibilitas
+        $kol_val = null;
+        if ($jenis == 'kunjungan') {
+            $kol_raw = $_POST['kolektibilitas'] ?? '';
+            if (!is_string($kol_raw) || !ctype_digit(trim($kol_raw))) {
+                throw new Exception("Kolektibilitas tidak valid.");
+            }
+            $kol_val = (int) trim($kol_raw);
+            $cekKol = $conn->prepare("SELECT 1 FROM reff_kolektibilitas WHERE kode = ?");
+            $cekKol->execute([$kol_val]);
+            if ($cekKol->fetchColumn() === false) {
+                throw new Exception("Kolektibilitas tidak valid.");
+            }
+        }
+
+                $nama_file = $d['bukti_kegiatan'] ?? '-'; 
 
         if (!empty($_FILES['foto_baru']['name'])) {
-            // Validasi Ukuran (2MB)
-            if ($_FILES['foto_baru']['size'] > 2097152) {
-                throw new Exception("Ukuran foto terlalu besar. Maksimal 2MB.");
+            // Validasi tipe (MIME) dan ukuran (5MB), sebelum file lama dihapus
+            $mime_ext = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'];
+            $ftype = mime_content_type($_FILES['foto_baru']['tmp_name']);
+            if ($ftype === false || !isset($mime_ext[$ftype])) {
+                throw new Exception("Tipe file foto tidak didukung.");
+            }
+            if ($_FILES['foto_baru']['size'] > 5242880) {
+                throw new Exception("Ukuran foto terlalu besar. Maksimal 5MB.");
             }
 
             $target_dir = "uploads/";
             if ($nama_file != '-' && file_exists($target_dir . $nama_file)) {
                 unlink($target_dir . $nama_file);
             }
-            $ext = pathinfo($_FILES['foto_baru']['name'], PATHINFO_EXTENSION);
+            $ext = $mime_ext[$ftype];
             $nama_file = "EDIT_" . time() . "_" . rand(100, 999) . "." . $ext;
             move_uploaded_file($_FILES['foto_baru']['tmp_name'], $target_dir . $nama_file);
         }
@@ -80,7 +100,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         
         } elseif ($jenis == 'kunjungan') {
             $sql = "UPDATE trx_kunjungan_ao SET tanggal_kunjungan=?, nama_nasabah=?, alamat_desa=?, kecamatan=?, kabupaten_kota=?, usaha_pekerjaan=?, keperluan_kunjungan=?, no_hp=?, respon=?, keterangan=?, kolektibilitas=?, bukti_kegiatan=? WHERE id=? AND pegawai_id=?";
-            $conn->prepare($sql)->execute([$_POST['tanggal'], $_POST['nama_nasabah'], $_POST['alamat'], $_POST['kec'], $_POST['kab'], $_POST['usaha'], $_POST['keperluan'], $_POST['no_hp'], $_POST['respon'], $_POST['keterangan'], $_POST['kolektibilitas'], $nama_file, $id, $id_pegawai]);
+            $conn->prepare($sql)->execute([$_POST['tanggal'], $_POST['nama_nasabah'], $_POST['alamat'], $_POST['kec'], $_POST['kab'], $_POST['usaha'], $_POST['keperluan'], $_POST['no_hp'], $_POST['respon'], $_POST['keterangan'], $kol_val, $nama_file, $id, $id_pegawai]);
 
         } elseif ($jenis == 'funding') {
             $sql = "UPDATE trx_prospek_funding SET tanggal_kunjungan=?, nama_prospek=?, jenis_prospek=?, no_hp=?, alamat_desa=?, kecamatan=?, kabupaten_kota=?, pekerjaan_usaha=?, estimasi_dana=?, produk_ditawarkan=?, ketertarikan_nasabah=?, hasil_kunjungan=?, status_prospek=?, catatan_marketing=?, bukti_kegiatan=? WHERE id=? AND pegawai_id=?";
@@ -190,7 +210,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     <div class="col-md-4"><label class="form-label">No HP Nasabah</label><input type="number" name="no_hp" class="form-control" value="<?= $d['no_hp'] ?>" required></div>
                     <div class="col-md-4"><label class="form-label">Kolektibilitas Saat Ini</label>
                         <select name="kolektibilitas" class="form-select">
-                            <?php foreach(["Lancar", "DPK", "Kurang Lancar", "Diragukan", "Macet"] as $k) echo "<option value='$k' ".($d['kolektibilitas']==$k?'selected':'').">$k</option>"; ?>
+                            <?php
+                            $kol_now  = trim((string) ($d['kolektibilitas'] ?? ''));
+                            $kol_now  = ctype_digit($kol_now) ? (string)(int)$kol_now : '';
+                            $kol_list = $conn->query("SELECT kode, nama FROM reff_kolektibilitas ORDER BY kode ASC")->fetchAll();
+                            $kol_ada  = false;
+                            foreach ($kol_list as $kl) { if ((string)$kl['kode'] === $kol_now) { $kol_ada = true; break; } }
+                            if (!$kol_ada) echo "<option value='' selected disabled>-</option>";
+                            foreach ($kol_list as $kl) {
+                                $sel = ((string)$kl['kode'] === $kol_now) ? 'selected' : '';
+                                echo "<option value='".htmlspecialchars($kl['kode'])."' $sel>".htmlspecialchars($kl['nama'])."</option>";
+                            }
+                            ?>
                         </select>
                     </div>
                     <div class="col-12"><label class="form-label">Keperluan Kunjungan</label>
@@ -351,7 +382,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                             <div class="flex-grow-1">
                                 <small class="text-success d-block mb-2 fw-bold">Ganti Foto Baru (Opsional):</small>
                                 <input type="file" name="foto_baru" id="foto_baru" class="form-control" accept="image/*">
-                                <small class="text-muted">Pilih file baru jika ingin mengubah foto bukti (Maks 2MB).</small>
+                                <small class="text-muted">Pilih file baru jika ingin mengubah foto bukti (Maks 5MB).</small>
                             </div>
                         </div>
                     </div>
@@ -382,7 +413,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         const calc = () => {
             let awal = parseFloat(sAwal.value) || 0;
             let setor = parseFloat(sSetor.value) || 0;
-            sAkhir.value = (sAwal.value === "" && sSetoran.value === "") ? "" : awal + setor;
+            sAkhir.value = (sAwal.value === "" && sSetor.value === "") ? "" : awal + setor;
         };
         sAwal.addEventListener('input', calc);
         sSetor.addEventListener('input', calc);
@@ -392,8 +423,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         const inputFoto = document.getElementById('foto_baru');
         if(inputFoto) {
             inputFoto.onchange = function() {
-                if(this.files[0].size > 2097152) { // 2MB
-                    Swal.fire({ icon: 'warning', title: 'File Terlalu Besar', text: 'Ukuran foto maksimal adalah 2MB.', confirmButtonColor: '#ffc107' });
+                if(this.files[0].size > 5242880) { // 5MB
+                    Swal.fire({ icon: 'warning', title: 'File Terlalu Besar', text: 'Ukuran foto maksimal adalah 5MB.', confirmButtonColor: '#ffc107' });
                     this.value = "";
                 }
             };

@@ -81,7 +81,10 @@ switch ($filter_jenis) {
         break;
     case 'kunjungan':
         $tgl_key = 'tanggal_kunjungan';
-        $sql = "SELECT * FROM trx_kunjungan_ao WHERE pegawai_id = :id AND tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s";
+        $sql = "SELECT t.*, rk.nama AS kolektibilitas_nama
+                FROM trx_kunjungan_ao t
+                LEFT JOIN reff_kolektibilitas rk ON rk.kode = CAST(t.kolektibilitas AS UNSIGNED)
+                WHERE t.pegawai_id = :id AND t.tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s";
         break;
     case 'prospek_f':
         $tgl_key = 'tanggal_kunjungan';
@@ -128,7 +131,7 @@ if (isset($_GET['export_jenis'])) {
     $equery_map = [
         'rencana'    => "SELECT tanggal,rencana_kegiatan,nama_nasabah,alamat_desa,kecamatan,kabupaten_kota,no_hp,hasil_yang_diharapkan,catatan FROM trx_rencana_kegiatan WHERE pegawai_id=:id AND tanggal BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal DESC",
         'prospek_ao' => "SELECT tanggal_kunjungan,nama_calon_debitur,alamat_desa,kecamatan,kabupaten_kota,usaha_pekerjaan,produk_ditawarkan,no_hp,status,keterangan FROM trx_prospek_ao WHERE pegawai_id=:id AND tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal_kunjungan DESC",
-        'kunjungan'  => "SELECT tanggal_kunjungan,nama_nasabah,alamat_desa,kecamatan,kabupaten_kota,usaha_pekerjaan,keperluan_kunjungan,no_hp,kolektibilitas,keterangan FROM trx_kunjungan_ao WHERE pegawai_id=:id AND tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal_kunjungan DESC",
+        'kunjungan'  => "SELECT t.tanggal_kunjungan,t.nama_nasabah,t.alamat_desa,t.kecamatan,t.kabupaten_kota,t.usaha_pekerjaan,t.keperluan_kunjungan,t.no_hp,COALESCE(rk.nama,'-') AS kolektibilitas,t.keterangan FROM trx_kunjungan_ao t LEFT JOIN reff_kolektibilitas rk ON rk.kode = CAST(t.kolektibilitas AS UNSIGNED) WHERE t.pegawai_id=:id AND t.tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s ORDER BY t.tanggal_kunjungan DESC",
         'prospek_f'  => "SELECT tanggal_kunjungan,nama_prospek,jenis_prospek,no_hp,alamat_desa,kecamatan,kabupaten_kota,pekerjaan_usaha,estimasi_dana,status_prospek FROM trx_prospek_funding WHERE pegawai_id=:id AND tanggal_kunjungan BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal_kunjungan DESC",
         'collection' => "SELECT tanggal,nama_nasabah,desa_lokasi,kecamatan,produk_nasabah,status_nasabah,saldo_sebelum,setoran_hari_ini,saldo_setelah,metode_setoran FROM trx_collection_funding WHERE pegawai_id=:id AND tanggal BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal DESC",
         'analisa'    => "SELECT tanggal_pengerjaan,nama_calon_debitur,plafond_dimohon,jangka_waktu,usaha,jenis_permohonan,suku_bunga,keperluan_kunjungan,keterangan FROM trx_analisa_kredit WHERE pegawai_id=:id AND tanggal_pengerjaan BETWEEN :tgl_m AND :tgl_s ORDER BY tanggal_pengerjaan DESC",
@@ -147,6 +150,11 @@ if (isset($_GET['export_jenis'])) {
 function safeNumber($val): string {
     if ($val === null || $val === '' || $val === '-') return '-';
     return is_numeric($val) ? number_format((float)$val, 0, ',', '.') : htmlspecialchars($val);
+}
+// Helper: label kolektibilitas dari hasil JOIN; nilai tidak terpetakan tampil "-"
+function kolLabel(array $r): string {
+    $n = $r['kolektibilitas_nama'] ?? null;
+    return ($n === null || $n === '') ? '-' : htmlspecialchars($n);
 }
 ?>
 <!DOCTYPE html>
@@ -347,7 +355,7 @@ function safeNumber($val): string {
                             <td><?= htmlspecialchars($r['usaha_pekerjaan']) ?></td>
                             <td><?= htmlspecialchars($r['keperluan_kunjungan']) ?></td>
                             <td><?= htmlspecialchars($r['no_hp']) ?></td>
-                            <td><span class="badge bg-dark"><?= htmlspecialchars($r['kolektibilitas']) ?></span></td>
+                            <td><span class="badge bg-dark"><?= kolLabel($r) ?></span></td>
                             <td><?= htmlspecialchars($r['keterangan']) ?></td>
                         <?php elseif ($filter_jenis=='prospek_f'): ?>
                             <td class="text-nowrap"><?= date('d/m/Y', strtotime($r['tanggal_kunjungan'])) ?></td>
@@ -435,7 +443,7 @@ function safeNumber($val): string {
                     <?php elseif ($filter_jenis=='prospek_ao'): ?>
                         <td><?= $r['tanggal_kunjungan'] ?></td><td><?= htmlspecialchars($r['nama_calon_debitur']) ?></td><td><?= htmlspecialchars($r['alamat_desa']) ?></td><td><?= htmlspecialchars($r['kecamatan']) ?></td><td><?= htmlspecialchars($r['kabupaten_kota']) ?></td><td><?= htmlspecialchars($r['usaha_pekerjaan']) ?></td><td><?= htmlspecialchars($r['produk_ditawarkan']) ?></td><td><?= htmlspecialchars($r['no_hp']) ?></td><td><?= htmlspecialchars($r['respon']) ?></td><td><?= htmlspecialchars($r['status']) ?></td>
                     <?php elseif ($filter_jenis=='kunjungan'): ?>
-                        <td><?= $r['tanggal_kunjungan'] ?></td><td><?= htmlspecialchars($r['nama_nasabah']) ?></td><td><?= htmlspecialchars($r['alamat_desa']) ?></td><td><?= htmlspecialchars($r['kecamatan']) ?></td><td><?= htmlspecialchars($r['kabupaten_kota']) ?></td><td><?= htmlspecialchars($r['usaha_pekerjaan']) ?></td><td><?= htmlspecialchars($r['keperluan_kunjungan']) ?></td><td><?= htmlspecialchars($r['no_hp']) ?></td><td><?= htmlspecialchars($r['respon']) ?></td><td><?= htmlspecialchars($r['kolektibilitas']) ?></td>
+                        <td><?= $r['tanggal_kunjungan'] ?></td><td><?= htmlspecialchars($r['nama_nasabah']) ?></td><td><?= htmlspecialchars($r['alamat_desa']) ?></td><td><?= htmlspecialchars($r['kecamatan']) ?></td><td><?= htmlspecialchars($r['kabupaten_kota']) ?></td><td><?= htmlspecialchars($r['usaha_pekerjaan']) ?></td><td><?= htmlspecialchars($r['keperluan_kunjungan']) ?></td><td><?= htmlspecialchars($r['no_hp']) ?></td><td><?= htmlspecialchars($r['respon']) ?></td><td><?= kolLabel($r) ?></td>
                     <?php elseif ($filter_jenis=='prospek_f'): ?>
                         <td><?= $r['tanggal_kunjungan'] ?></td><td><?= htmlspecialchars($r['nama_prospek']) ?></td><td><?= htmlspecialchars($r['jenis_prospek']) ?></td><td><?= htmlspecialchars($r['no_hp']) ?></td><td><?= htmlspecialchars($r['alamat_desa']) ?></td><td><?= htmlspecialchars($r['kecamatan']) ?></td><td><?= htmlspecialchars($r['kabupaten_kota']) ?></td><td><?= htmlspecialchars($r['pekerjaan_usaha']) ?></td><td><?= safeNumber($r['estimasi_dana']) ?></td><td><?= htmlspecialchars($r['status_prospek']) ?></td>
                     <?php elseif ($filter_jenis=='collection'): ?>

@@ -1,0 +1,64 @@
+-- ============================================================
+-- Migrasi kolektibilitas teks -> angka (1-5)
+-- JANGAN dijalankan otomatis. Jalankan berurutan, periksa hasil tiap langkah.
+-- ============================================================
+
+-- 1. Tabel referensi
+CREATE TABLE reff_kolektibilitas (
+    kode TINYINT PRIMARY KEY,
+    nama VARCHAR(50) NOT NULL
+);
+
+INSERT INTO reff_kolektibilitas (kode, nama) VALUES
+    (1, 'Lancar'),
+    (2, 'DPK'),
+    (3, 'Kurang Lancar'),
+    (4, 'Diragukan'),
+    (5, 'Macet');
+
+-- 2. PEMERIKSAAN SEBELUM
+-- 2a. Jumlah baris per nilai kolektibilitas
+SELECT kolektibilitas, COUNT(*) AS jumlah
+FROM trx_kunjungan_ao
+GROUP BY kolektibilitas
+ORDER BY kolektibilitas;
+
+-- 2b. Baris yang tidak terpetakan (bukan teks yang dikenal dan bukan angka 1-5). Hanya dilaporkan.
+SELECT COUNT(*) AS tidak_terpetakan_sebelum
+FROM trx_kunjungan_ao
+WHERE kolektibilitas IS NULL
+   OR kolektibilitas NOT IN ('Lancar','DPK','Kurang Lancar','KL','Diragukan','Macet','1','2','3','4','5');
+
+-- 3. UPDATE (satu statement; nilai di luar peta tidak disentuh)
+-- Catatan: jika klien SQL memakai safe-update mode, nonaktifkan sementara untuk sesi ini.
+UPDATE trx_kunjungan_ao
+SET kolektibilitas = CASE kolektibilitas
+        WHEN 'Lancar'        THEN '1'
+        WHEN 'DPK'           THEN '2'
+        WHEN 'Kurang Lancar' THEN '3'
+        WHEN 'KL'            THEN '3'
+        WHEN 'Diragukan'     THEN '4'
+        WHEN 'Macet'         THEN '5'
+        ELSE kolektibilitas
+    END
+WHERE kolektibilitas IN ('Lancar','DPK','Kurang Lancar','KL','Diragukan','Macet');
+
+-- 4. PEMERIKSAAN SESUDAH
+-- 4a. Jumlah baris per nilai kolektibilitas
+SELECT kolektibilitas, COUNT(*) AS jumlah
+FROM trx_kunjungan_ao
+GROUP BY kolektibilitas
+ORDER BY kolektibilitas;
+
+-- 4b. Baris yang masih tidak terpetakan (harus 0 jika data bersih). Hanya dilaporkan.
+SELECT COUNT(*) AS tidak_terpetakan_sesudah
+FROM trx_kunjungan_ao
+WHERE kolektibilitas IS NULL
+   OR kolektibilitas NOT IN ('1','2','3','4','5');
+
+-- 4c. Daftar nilai yang tidak terpetakan (untuk ditindaklanjuti manual)
+SELECT kolektibilitas, COUNT(*) AS jumlah
+FROM trx_kunjungan_ao
+WHERE kolektibilitas IS NULL
+   OR kolektibilitas NOT IN ('1','2','3','4','5')
+GROUP BY kolektibilitas;

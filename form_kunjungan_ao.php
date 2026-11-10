@@ -21,6 +21,17 @@ $link_kembali = ($_SESSION['role'] ?? '') === 'atasan' ? 'dashboard_atasan.php' 
 $status_simpan = "";
 $pesan_error   = "";
 
+// Keperluan yang mewajibkan No. Rekening
+$KEP_BERMASALAH = 'Penanganan/Penagihan Kredit Bermasalah';
+
+// Ekstensi file ditentukan dari tipe MIME hasil validasi, bukan dari nama file asli
+$mime_ext = [
+    'image/jpeg' => 'jpg',
+    'image/png'  => 'png',
+    'image/gif'  => 'gif',
+    'image/webp' => 'webp',
+];
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     try {
         // Upload Foto — support dua jalur:
@@ -35,23 +46,28 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
             $decoded = base64_decode($b64data);
             if ($decoded === false) throw new Exception("Data foto tidak valid (base64 rusak).");
-            $ext       = preg_replace('/[^a-z0-9]/', '', strtolower($_POST['foto_ext'] ?? 'jpg'));
-            if (!in_array($ext, ['jpg','jpeg','png','gif','webp'])) $ext = 'jpg';
+
+            // Pastikan hasil decode benar-benar gambar
+            $info = @getimagesizefromstring($decoded);
+            if ($info === false || !isset($info['mime']) || !isset($mime_ext[$info['mime']])) {
+                throw new Exception("Data foto bukan gambar yang valid (jpeg/png/gif/webp).");
+            }
+            $ext = $mime_ext[$info['mime']];
+
             $target_dir = "uploads/";
-            if (!is_dir($target_dir)) mkdir($target_dir, 0777, true);
-            $nama_file  = "KNJ_" . time() . "_" . mt_rand(1000,9999) . ".jpg";
+            if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
+            $nama_file  = "KNJ_" . time() . "_" . mt_rand(1000,9999) . "." . $ext;
             if (file_put_contents($target_dir . $nama_file, $decoded) === false) {
                 throw new Exception("Gagal menyimpan foto ke server.");
             }
         } elseif (!empty($_FILES['bukti_kegiatan']['name'])) {
             // Jalur 2: upload file biasa
-            $allowed_types = ['image/jpeg','image/png','image/gif','image/webp'];
             $ftype = mime_content_type($_FILES['bukti_kegiatan']['tmp_name']);
-            if (!in_array($ftype, $allowed_types)) throw new Exception("Tipe file foto tidak didukung.");
+            if ($ftype === false || !isset($mime_ext[$ftype])) throw new Exception("Tipe file foto tidak didukung.");
             if ($_FILES['bukti_kegiatan']['size'] > 5242880) throw new Exception("Ukuran foto maks 5MB.");
             $target_dir = "uploads/";
-            if (!is_dir($target_dir)) mkdir($target_dir, 0777, true);
-            $ext       = pathinfo($_FILES['bukti_kegiatan']['name'], PATHINFO_EXTENSION);
+            if (!is_dir($target_dir)) mkdir($target_dir, 0755, true);
+            $ext       = $mime_ext[$ftype];
             $nama_file = "KNJ_" . time() . "_" . mt_rand(1000,9999) . "." . $ext;
             if (!move_uploaded_file($_FILES['bukti_kegiatan']['tmp_name'], $target_dir . $nama_file)) {
                 throw new Exception("Gagal mengunggah foto ke server.");
@@ -64,6 +80,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             if (empty($_POST[$f])) throw new Exception("Field '{$f}' wajib diisi.");
         }
 
+        // Validasi No. Rekening: buang semua non-digit, harus tepat 12 digit
+        $rek_raw  = (isset($_POST['no_rekening']) && is_string($_POST['no_rekening'])) ? trim($_POST['no_rekening']) : '';
+        $rek      = preg_replace('/\D/', '', $rek_raw);
+        $diisi    = ($rek_raw !== '');
+        $wajib    = (trim((string)$_POST['keperluan']) === $KEP_BERMASALAH);
+        if ($wajib && !$diisi) {
+            throw new Exception("No. Rekening wajib diisi (12 digit) untuk keperluan '{$KEP_BERMASALAH}'.");
+        }
+        if ($diisi && strlen($rek) !== 12) {
+            throw new Exception("No. Rekening harus tepat 12 digit angka (terisi " . strlen($rek) . " digit). Titik pemisah akan dibuang otomatis.");
+        }
+        $no_rekening = $diisi ? $rek : null; // kosong -> NULL
+
+        // Validasi Kolektibilitas terhadap reff_kolektibilitas (kode angka)
+        $kol_raw = $_POST['kolektibilitas'] ?? '1';
+        if (!is_string($kol_raw) || !ctype_digit(trim($kol_raw))) {
+            throw new Exception("Kolektibilitas tidak valid.");
+        }
+        $kolektibilitas = (int) trim($kol_raw);
+        $cekKol = $conn->prepare("SELECT kode FROM reff_kolektibilitas WHERE kode = ?");
+        $cekKol->execute([$kolektibilitas]);
+        if ($cekKol->fetchColumn() === false) {
+            throw new Exception("Kolektibilitas tidak valid.");
+        }
+
         $sql = "INSERT INTO trx_kunjungan_ao 
                 (pegawai_id, tanggal_kunjungan, nama_nasabah, no_rekening, alamat_desa, kecamatan, kabupaten_kota,
                  usaha_pekerjaan, keperluan_kunjungan, no_hp, respon, keterangan, kolektibilitas, bukti_kegiatan) 
@@ -72,10 +113,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $stmt = $conn->prepare($sql);
         $stmt->execute([
             $id_pegawai,
-            $_POST['tanggal'], $_POST['nama_nasabah'], $_POST['no_rekening'] ?? '', $_POST['alamat'],
+            $_POST['tanggal'], $_POST['nama_nasabah'], $no_rekening, $_POST['alamat'],
             $_POST['kec'], $_POST['kab'], $_POST['usaha'], $_POST['keperluan'],
             $_POST['no_hp'], $_POST['respon'], $_POST['keterangan'] ?? '',
-            $_POST['kolektibilitas'] ?? 'Lancar', $nama_file
+            $kolektibilitas, $nama_file
         ]);
 
         // Jika request dari fetch (AJAX), kirim JSON — bukan redirect
@@ -108,6 +149,11 @@ if (isset($_SESSION['status_simpan'])) {
     $notif_sukses = true;
     unset($_SESSION['status_simpan']);
 }
+
+// Pilihan kolektibilitas yang dipertahankan saat form gagal disimpan (default: 1 = Lancar)
+$kol_pilih = (isset($_POST['kolektibilitas']) && is_string($_POST['kolektibilitas'])) ? trim($_POST['kolektibilitas']) : '1';
+// Status required awal No. Rekening (saat form diisi ulang)
+$rek_required = (isset($_POST['keperluan']) && is_string($_POST['keperluan']) && trim($_POST['keperluan']) === $KEP_BERMASALAH);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -157,7 +203,8 @@ if (isset($_SESSION['status_simpan'])) {
                     </div>
                     <div class="col-md-4 mb-3">
                         <label class="form-label">No. Rekening</label>
-                        <input type="text" name="no_rekening" class="form-control" placeholder="Masukkan nomor rekening..." value="<?= htmlspecialchars($_POST['no_rekening'] ?? '') ?>" inputmode="numeric" pattern="[0-9]*">
+                        <input type="text" name="no_rekening" id="inputRekening" class="form-control" placeholder="12 digit angka..." value="<?= htmlspecialchars($_POST['no_rekening'] ?? '') ?>" inputmode="numeric" maxlength="12" pattern="[0-9]{12}" title="Harus tepat 12 digit angka" autocomplete="off" <?= $rek_required ? 'required' : '' ?>>
+                        <div class="form-text">12 digit angka, tanpa titik. Wajib untuk kredit bermasalah.</div>
                     </div>
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Alamat / Desa</label>
@@ -183,17 +230,19 @@ if (isset($_SESSION['status_simpan'])) {
                         <label class="form-label">Kolektibilitas Saat Ini</label>
                         <select name="kolektibilitas" class="form-select">
                             <?php
-                            $kol_list = ["Lancar", "DPK", "Kurang Lancar", "Diragukan", "Macet"];
-                            foreach ($kol_list as $kol) {
-                                $sel = (isset($_POST['kolektibilitas']) && $_POST['kolektibilitas'] == $kol) ? 'selected' : '';
-                                echo "<option value='".htmlspecialchars($kol)."' $sel>".htmlspecialchars($kol)."</option>";
-                            }
+                            try {
+                                $q = $conn->query("SELECT kode, nama FROM reff_kolektibilitas ORDER BY kode ASC");
+                                while ($kl = $q->fetch(PDO::FETCH_ASSOC)) {
+                                    $sel = ((string)$kl['kode'] === $kol_pilih) ? 'selected' : '';
+                                    echo "<option value='".htmlspecialchars($kl['kode'])."' $sel>".htmlspecialchars($kl['nama'])."</option>";
+                                }
+                            } catch (PDOException $e) { echo "<option value=''>Gagal memuat kolektibilitas</option>"; }
                             ?>
                         </select>
                     </div>
                     <div class="col-12 mb-3">
                         <label class="form-label">Keperluan Kunjungan</label>
-                        <select name="keperluan" class="form-select" required>
+                        <select name="keperluan" id="selKeperluan" class="form-select" required>
                             <option value="">-- Pilih Keperluan --</option>
                             <?php
                             try {
@@ -280,6 +329,33 @@ function compressImage(file) {
 }
 
 document.addEventListener('DOMContentLoaded', function () {
+
+    // ============================================================
+    //  No. Rekening: hanya angka, maks 12 digit, required sesuai keperluan
+    // ============================================================
+    const KEP_BERMASALAH = 'Penanganan/Penagihan Kredit Bermasalah';
+    const inputRek  = document.getElementById('inputRekening');
+    const selKep    = document.getElementById('selKeperluan');
+    const formKunj  = document.getElementById('formKunjungan');
+
+    function syncRekRequired() {
+        inputRek.required = (selKep.value === KEP_BERMASALAH);
+    }
+    function bersihkanRek() {
+        const v = inputRek.value.replace(/\D/g, '').slice(0, 12);
+        if (inputRek.value !== v) inputRek.value = v;
+    }
+    inputRek.addEventListener('input', bersihkanRek);
+    inputRek.addEventListener('paste', function (e) {
+        // Tempel format berpemisah (mis. 12.34.567890.12): buang non-digit dulu agar tidak terpotong maxlength
+        e.preventDefault();
+        const t = ((e.clipboardData || window.clipboardData).getData('text') || '').replace(/\D/g, '');
+        this.setRangeText(t, this.selectionStart, this.selectionEnd, 'end');
+        bersihkanRek();
+    });
+    selKep.addEventListener('change', syncRekRequired);
+    formKunj.addEventListener('reset', function () { setTimeout(syncRekRequired, 0); });
+    syncRekRequired();
 
     // ============================================================
     //  Notifikasi sukses dari submit normal (tanpa foto)
