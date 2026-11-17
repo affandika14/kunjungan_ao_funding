@@ -11,6 +11,7 @@ include 'koneksi.php';
 include 'koneksi_magang.php';
 $sumber = ($_GET['sumber'] ?? '') === 'magang' ? 'magang' : 'utama';
 if ($sumber === 'magang') { $conn = $conn_magang; }
+$upload_base = ($sumber === 'magang') ? UPLOAD_URL_MAGANG : 'uploads/';
 
 // === PATCH: Paksa PDO error mode ke EXCEPTION ===
 try { $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (Exception $e) {}
@@ -269,7 +270,7 @@ function kolLabel(array $r): string {
                         <?php endif; ?>
                         <td class="text-center">
                             <?php if (!empty($r['bukti_kegiatan']) && $r['bukti_kegiatan'] !== '-'): ?>
-                                <button type="button" class="btn btn-sm btn-info text-white p-1" onclick="viewPhoto('uploads/<?= htmlspecialchars($r['bukti_kegiatan']) ?>')">
+                                <button type="button" class="btn btn-sm btn-info text-white p-1" onclick="viewPhoto('<?= htmlspecialchars($upload_base . rawurlencode($r['bukti_kegiatan'])) ?>')">
                                     <i class="bi bi-camera"></i>
                                 </button>
                             <?php else: ?>

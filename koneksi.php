@@ -1,7 +1,7 @@
 <?php
-$host = "127.0.0.1";
+$host = "db_dashboard";
 $user = "root";
-$pass = "";
+$pass = "eb13031991*";
 $db   = "formaofunding";
 
 try {

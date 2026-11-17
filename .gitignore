@@ -5,3 +5,17 @@ uploads.zip
 # Jika juga ada folder tanpa s
 upload.zip
 /upload/
+# Upload files
+uploads.zip
+/uploads/
+
+# Jika juga ada folder tanpa s
+upload.zip
+/upload/
+
+
+# Database & Config Connections
+koneksi.php
+koneksi_magang.php
+**/koneksi.php
+**/koneksi_magang.php
