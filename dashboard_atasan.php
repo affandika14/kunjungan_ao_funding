@@ -1,18 +1,22 @@
 <?php
 session_start();
 
-// 1. Proteksi Session: Pastikan sudah login DAN perannya adalah atasan
+// 1. Proteksi Session
 if (!isset($_SESSION['is_login']) || $_SESSION['role'] !== 'atasan') {
     header("Location: login.php");
     exit;
 }
 
 include 'koneksi.php';
+include 'koneksi_magang.php';
+$sumber = ($_GET['sumber'] ?? '') === 'magang' ? 'magang' : 'utama';
+if ($sumber === 'magang') { $conn = $conn_magang; }
 
-// 2. Ambil ID Atasan dari Session
+try { $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (Exception $e) {}
+try { $conn_magang->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (Exception $e) {}
+
+// 2. Info atasan: SELALU dari DB utama
 $id_atasan = $_SESSION['pegawai_id'];
-
-// Ambil info atasan yang sedang aktif
 $stmt_atasan = $conn->prepare("SELECT nama, posisi, kantor FROM pegawai WHERE id = ?");
 $stmt_atasan->execute([$id_atasan]);
 $atasan = $stmt_atasan->fetch();
@@ -24,45 +28,46 @@ if (!$atasan) {
 }
 
 // --- LOGIKA FILTER ---
-$tgl_mulai   = $_GET['tgl_mulai'] ?? date('Y-m-d');
-$tgl_selesai = $_GET['tgl_selesai'] ?? date('Y-m-d');
+$tgl_mulai      = $_GET['tgl_mulai'] ?? date('Y-m-d');
+$tgl_selesai    = $_GET['tgl_selesai'] ?? date('Y-m-d');
 $filter_petugas = $_GET['petugas_id'] ?? '';
-$filter_tipe = $_GET['tipe'] ?? 'semua'; // 'semua' atau 'petugas'
+$filter_tipe    = $_GET['tipe'] ?? 'semua'; // semua | petugas | magang
+if (!in_array($filter_tipe, ['semua', 'petugas', 'magang'], true)) {
+    $filter_tipe = 'semua';
+}
 
-// Ambil daftar bawahan untuk dropdown filter
-$sql_b = "SELECT p.*, u.status 
+// Pilih DB untuk daftar petugas & laporan
+$sumber    = ($filter_tipe === 'magang') ? 'magang' : 'utama';
+$db_aktif  = ($sumber === 'magang') ? $conn_magang : $conn;
+
+// Dropdown bawahan
+$sql_b = "SELECT p.*, u.status
           FROM mapping_atasan ma
           JOIN pegawai p ON ma.id_bawahan = p.id
           JOIN users u ON p.id = u.pegawai_id
           WHERE ma.id_atasan = ? AND u.status = 'aktif'
           ORDER BY p.nama ASC";
-
-$stmt_b = $conn->prepare($sql_b);
-$stmt_b->execute([$id_atasan]); // $id_atasan berasal dari session
+$stmt_b = $db_aktif->prepare($sql_b);
+$stmt_b->execute([$id_atasan]);
 $list_bawahan = $stmt_b->fetchAll();
 
-// --- QUERY DATA (UNION) DENGAN GROUP BY PEGAWAI ---
-/**
- * Kita melakukan UNION untuk mencari siapa saja yang mengisi laporan di rentang tanggal tersebut,
- * kemudian membungkusnya dalam subquery untuk melakukan GROUP BY agar satu nama hanya muncul sekali.
- */
+// --- QUERY DATA (UNION) ---
 $tables = [
-    ['table' => 'trx_analisa_kredit', 'tgl' => 'tanggal_pengerjaan'],
+    ['table' => 'trx_analisa_kredit',     'tgl' => 'tanggal_pengerjaan'],
     ['table' => 'trx_collection_funding', 'tgl' => 'tanggal'],
-    ['table' => 'trx_prospek_funding', 'tgl' => 'tanggal_kunjungan'],
-    ['table' => 'trx_prospek_ao', 'tgl' => 'tanggal_kunjungan'],
-    ['table' => 'trx_kunjungan_ao', 'tgl' => 'tanggal_kunjungan'],
-    ['table' => 'trx_rencana_kegiatan', 'tgl' => 'tanggal']
+    ['table' => 'trx_prospek_funding',    'tgl' => 'tanggal_kunjungan'],
+    ['table' => 'trx_prospek_ao',         'tgl' => 'tanggal_kunjungan'],
+    ['table' => 'trx_kunjungan_ao',       'tgl' => 'tanggal_kunjungan'],
+    ['table' => 'trx_rencana_kegiatan',   'tgl' => 'tanggal'],
 ];
 
 $union_parts = [];
 foreach ($tables as $t) {
-    $union_parts[] = "SELECT pegawai_id, {$t['tgl']} as tgl_data FROM {$t['table']}";
+    $union_parts[] = "SELECT pegawai_id, {$t['tgl']} AS tgl_data FROM {$t['table']}";
 }
-
 $union_sql = implode(" UNION ALL ", $union_parts);
 
-$full_sql = "SELECT p.nama as nama_petugas, p.jabatan, u.pegawai_id, MAX(u.tgl_data) as tgl_terakhir 
+$full_sql = "SELECT p.nama AS nama_petugas, p.jabatan, u.pegawai_id, MAX(u.tgl_data) AS tgl_terakhir
              FROM ($union_sql) u
              JOIN pegawai p ON u.pegawai_id = p.id
              WHERE u.pegawai_id IN (SELECT id_bawahan FROM mapping_atasan WHERE id_atasan = :atasan)
@@ -71,14 +76,12 @@ $full_sql = "SELECT p.nama as nama_petugas, p.jabatan, u.pegawai_id, MAX(u.tgl_d
 if (!empty($filter_petugas)) {
     $full_sql .= " AND u.pegawai_id = :petugas";
 }
-
 if ($filter_tipe === 'petugas') {
     $full_sql .= " AND p.jabatan = 'Staff'";
 }
+$full_sql .= " GROUP BY u.pegawai_id, p.nama, p.jabatan ORDER BY nama_petugas ASC";
 
-$full_sql .= " GROUP BY u.pegawai_id ORDER BY nama_petugas ASC";
-
-$stmt_laporan = $conn->prepare($full_sql);
+$stmt_laporan = $db_aktif->prepare($full_sql);
 $stmt_laporan->bindValue(':atasan', $id_atasan);
 $stmt_laporan->bindValue(':tgl1', $tgl_mulai);
 $stmt_laporan->bindValue(':tgl2', $tgl_selesai);
@@ -135,12 +138,16 @@ $laporan = $stmt_laporan->fetchAll();
 <div class="container pb-5">
     <div class="filter-section mb-4">
         <form method="GET" class="row g-3 align-items-end">
+            <input type="hidden" name="tipe" value="<?= htmlspecialchars($filter_tipe) ?>">
+            <input type="hidden" name="id_pegawai" value="<?= htmlspecialchars($id_target_ao) ?>">
+            <input type="hidden" name="sumber" value="<?= htmlspecialchars($sumber) ?>">
+
             <div class="col-md-4">
                 <label class="form-label-custom">Rentang Tanggal Aktivitas</label>
                 <div class="input-group input-group-sm">
-                    <input type="date" name="tgl_mulai" class="form-control" value="<?= $tgl_mulai ?>">
+                    <input type="date" name="tgl_mulai" class="form-control" value="<?= htmlspecialchars($tgl_mulai) ?>">
                     <span class="input-group-text bg-light text-muted small">s/d</span>
-                    <input type="date" name="tgl_selesai" class="form-control" value="<?= $tgl_selesai ?>">
+                    <input type="date" name="tgl_selesai" class="form-control" value="<?= htmlspecialchars($tgl_selesai) ?>">
                 </div>
             </div>
 
@@ -185,18 +192,25 @@ $laporan = $stmt_laporan->fetchAll();
             </h6>
             <small class="text-muted">Menampilkan petugas yang mengisi laporan pada periode ini</small>
         </div>
-         <div class="px-4 pb-3">
-    <div class="btn-group btn-group-sm" role="group">
-        <a href="?tgl_mulai=<?= $tgl_mulai ?>&tgl_selesai=<?= $tgl_selesai ?>&petugas_id=<?= $filter_petugas ?>&tipe=semua"
-           class="btn <?= $filter_tipe === 'semua' ? 'btn-green' : 'btn-outline-success' ?>">
-            Tampilkan Semua
-        </a>
-        <a href="?tgl_mulai=<?= $tgl_mulai ?>&tgl_selesai=<?= $tgl_selesai ?>&petugas_id=<?= $filter_petugas ?>&tipe=petugas"
-           class="btn <?= $filter_tipe === 'petugas' ? 'btn-green' : 'btn-outline-success' ?>">
-            Hanya Petugas
-        </a>
-    </div>
-</div>
+
+        <div class="px-4 py-3">
+            <?php $qs_tab = 'tgl_mulai=' . urlencode($tgl_mulai) . '&tgl_selesai=' . urlencode($tgl_selesai); ?>
+            <div class="btn-group btn-group-sm" role="group">
+                <a href="?<?= $qs_tab ?>&tipe=semua"
+                   class="btn <?= $filter_tipe === 'semua' ? 'btn-green' : 'btn-outline-success' ?>">
+                    Tampilkan Semua
+                </a>
+                <a href="?<?= $qs_tab ?>&tipe=petugas"
+                   class="btn <?= $filter_tipe === 'petugas' ? 'btn-green' : 'btn-outline-success' ?>">
+                    Hanya Petugas
+                </a>
+                <a href="?<?= $qs_tab ?>&tipe=magang"
+                   class="btn <?= $filter_tipe === 'magang' ? 'btn-green' : 'btn-outline-success' ?>">
+                    Peserta Magang
+                </a>
+            </div>
+        </div>
+
         <div class="card-body p-0">
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
@@ -219,7 +233,7 @@ $laporan = $stmt_laporan->fetchAll();
                                 <i class="bi bi-calendar-check me-1"></i> <?= date('d/m/Y', strtotime($l['tgl_terakhir'])) ?>
                             </td>
                             <td class="text-center">
-                                <a href="monitoring_atasan_detail.php?id_pegawai=<?= $l['pegawai_id'] ?>&tgl_mulai=<?= $tgl_mulai ?>&tgl_selesai=<?= $tgl_selesai ?>&jenis=rencana" 
+                                <a href="monitoring_atasan_detail.php?id_pegawai=<?= $l['pegawai_id'] ?>&tgl_mulai=<?= urlencode($tgl_mulai) ?>&tgl_selesai=<?= urlencode($tgl_selesai) ?>&jenis=rencana&sumber=<?= $sumber ?>"
                                    class="btn btn-detail btn-sm">
                                     <i class="bi bi-search me-1"></i> Buka Laporan
                                 </a>

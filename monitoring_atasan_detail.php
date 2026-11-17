@@ -8,6 +8,9 @@ if (!isset($_SESSION['is_login']) || $_SESSION['role'] !== 'atasan') {
 }
 
 include 'koneksi.php';
+include 'koneksi_magang.php';
+$sumber = ($_GET['sumber'] ?? '') === 'magang' ? 'magang' : 'utama';
+if ($sumber === 'magang') { $conn = $conn_magang; }
 
 // === PATCH: Paksa PDO error mode ke EXCEPTION ===
 try { $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION); } catch (Exception $e) {}
@@ -188,6 +191,7 @@ function kolLabel(array $r): string {
     <div class="header-info p-4 mb-4 no-print">
         <form method="GET" class="row align-items-end g-3">
             <input type="hidden" name="id_pegawai" value="<?= htmlspecialchars($id_target_ao) ?>">
+            <input type="hidden" name="sumber" value="<?= htmlspecialchars($sumber) ?>">
             <div class="col-md-4">
                 <h5 class="mb-1 fw-bold text-success text-uppercase"><i class="bi bi-eye-fill me-2"></i>Mode Pantauan Atasan</h5>
                 <p class="mb-0 text-dark small">Petugas: <strong><?= htmlspecialchars($p['nama'] ?? '-') ?></strong> | Cabang: <?= htmlspecialchars($p['kantor'] ?? '-') ?></p>
@@ -468,7 +472,7 @@ function getTableRows(cfg) {
 }
 async function fetchKategori(jenis, tgl_mulai, tgl_selesai) {
     const pid = getPegawaiId();
-    const url = `${window.location.pathname}?id_pegawai=${pid}&export_jenis=${jenis}&tgl_mulai=${tgl_mulai}&tgl_selesai=${tgl_selesai}`;
+    const url = `${window.location.pathname}?id_pegawai=${pid}&sumber=${new URLSearchParams(window.location.search).get('sumber') || 'utama'}&export_jenis=${jenis}&tgl_mulai=${tgl_mulai}&tgl_selesai=${tgl_selesai}`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`Gagal mengambil data ${jenis}`);
     const rawData = await resp.json();
